@@ -6,8 +6,8 @@ import (
     "strings"
     "time"
 
+    "github.com/aws/aws-sdk-go-v2/aws"
     "github.com/aws/aws-sdk-go-v2/config"
-    "github.com/aws/aws-sdk-go-v2/service/batch"
     "github.com/aws/aws-sdk-go-v2/service/ec2"
     "github.com/aws/aws-sdk-go-v2/service/ecr"
     
@@ -38,19 +38,24 @@ func New(ctx context.Context, profile string, region string) (*Builder, error) {
         return nil, fmt.Errorf("loading AWS config with profile %s and region %s: %w", profile, region, err)
     }
 
+    return NewFromConfig(cfg, region), nil
+}
+
+// NewFromConfig creates a Builder from an existing AWS config
+func NewFromConfig(cfg aws.Config, region string) *Builder {
     return &Builder{
         ec2Client:    ec2.NewFromConfig(cfg),
         ecrClient:    ecr.NewFromConfig(cfg),
         quotaChecker: common.NewQuotaChecker(cfg, region),
-        profile:      profile,
+        profile:      "", // Not available from config
         region:       region,
-    }, nil
+    }
 }
 
 func (b *Builder) BuildMatrix(ctx context.Context, config *common.BuildConfig) error {
     fmt.Printf("Building complete matrix in region %s...\n", b.region)
     
-    for arch, archConfig := range config.Architectures {
+    for arch := range config.Architectures {
         fmt.Printf("Processing architecture: %s\n", arch)
         if err := b.BuildAllForArch(ctx, config, arch); err != nil {
             return fmt.Errorf("building arch %s: %w", arch, err)

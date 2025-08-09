@@ -9,7 +9,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	"github.com/scttfrdmn/geoschem-aws/internal/common"
 	"github.com/scttfrdmn/geoschem-aws/internal/ssh"
@@ -23,7 +22,7 @@ type SSHBuilder struct {
 
 // NewSSHBuilder creates a new SSH-enabled builder
 func NewSSHBuilder(cfg aws.Config) *SSHBuilder {
-	builder := New(cfg)
+	builder := NewFromConfig(cfg, cfg.Region)
 	return &SSHBuilder{
 		Builder:        builder,
 		keyPairManager: ssh.NewKeyPairManager(builder.ec2Client),
@@ -31,7 +30,7 @@ func NewSSHBuilder(cfg aws.Config) *SSHBuilder {
 }
 
 // BuildWithSSH launches an instance and establishes SSH connection for building
-func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConfig, arch string) error {
+func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConfig, arch string) (string, error) {
 	// Setup key pair for SSH access
 	keyPairName := fmt.Sprintf("geoschem-builder-%s", arch)
 	privateKeyPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s.pem", keyPairName))
@@ -39,7 +38,7 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 	// Ensure key pair exists
 	err := sb.keyPairManager.GetOrCreateKeyPair(ctx, keyPairName, privateKeyPath)
 	if err != nil {
-		return fmt.Errorf("setting up key pair: %w", err)
+		return "", fmt.Errorf("setting up key pair: %w", err)
 	}
 
 	// Update config to use our key pair
@@ -48,7 +47,7 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 	// Launch the build instance
 	instanceID, err := sb.launchBuildInstance(ctx, config, arch)
 	if err != nil {
-		return fmt.Errorf("launching build instance: %w", err)
+		return "", fmt.Errorf("launching build instance: %w", err)
 	}
 
 	fmt.Printf("Launched build instance: %s\n", instanceID)
@@ -56,7 +55,7 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 	// Wait for instance to be running and get public IP
 	publicIP, err := sb.waitForInstanceReady(ctx, instanceID)
 	if err != nil {
-		return fmt.Errorf("waiting for instance: %w", err)
+		return instanceID, fmt.Errorf("waiting for instance: %w", err)
 	}
 
 	fmt.Printf("Instance ready with public IP: %s\n", publicIP)
@@ -64,14 +63,14 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 	// Setup SSH client
 	sb.sshClient, err = ssh.NewClient(publicIP, "rocky", privateKeyPath)
 	if err != nil {
-		return fmt.Errorf("creating SSH client: %w", err)
+		return instanceID, fmt.Errorf("creating SSH client: %w", err)
 	}
 
 	// Wait for SSH to be available (instance needs to boot)
 	fmt.Println("Waiting for SSH connection...")
 	err = sb.sshClient.WaitForConnection(ctx, publicIP, 30) // 30 retries = ~5 minutes
 	if err != nil {
-		return fmt.Errorf("establishing SSH connection: %w", err)
+		return instanceID, fmt.Errorf("establishing SSH connection: %w", err)
 	}
 
 	fmt.Println("SSH connection established!")
@@ -79,11 +78,11 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 	// Test SSH connection
 	err = sb.sshClient.TestConnection(ctx)
 	if err != nil {
-		return fmt.Errorf("testing SSH connection: %w", err)
+		return instanceID, fmt.Errorf("testing SSH connection: %w", err)
 	}
 
 	fmt.Println("SSH connection verified!")
-	return nil
+	return instanceID, nil
 }
 
 // waitForInstanceReady waits for instance to be running and returns public IP
@@ -213,6 +212,11 @@ func (sb *SSHBuilder) TestDockerConnection(ctx context.Context) error {
 
 	fmt.Println("Docker connection verified!")
 	return nil
+}
+
+// GetSSHClient returns the SSH client for direct use
+func (sb *SSHBuilder) GetSSHClient() *ssh.Client {
+	return sb.sshClient
 }
 
 // CleanupInstance terminates the build instance

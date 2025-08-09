@@ -8,6 +8,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/service/servicequotas"
     "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
     "github.com/aws/aws-sdk-go-v2/service/ec2"
+    ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
     "github.com/aws/aws-sdk-go-v2/service/support"
     "github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -111,15 +112,19 @@ func (qc *QuotaChecker) checkEC2Quotas(ctx context.Context) ([]QuotaStatus, erro
         runningInstances += len(reservation.Instances)
     }
 
-    status := qc.evaluateQuotaStatus(float64(runningInstances), onDemandQuota.Value)
+    quotaValue := float64(0)
+    if onDemandQuota.Value != nil {
+        quotaValue = *onDemandQuota.Value
+    }
+    status := qc.evaluateQuotaStatus(float64(runningInstances), quotaValue)
     quotas = append(quotas, QuotaStatus{
         ServiceName: "EC2",
         QuotaName:   "Running On-Demand Instances",
         Current:     float64(runningInstances),
-        Limit:       onDemandQuota.Value,
-        Usage:       (float64(runningInstances) / onDemandQuota.Value) * 100,
+        Limit:       quotaValue,
+        Usage:       (float64(runningInstances) / quotaValue) * 100,
         Status:      status,
-        Message:     qc.getQuotaMessage("EC2 instances", status, float64(runningInstances), onDemandQuota.Value),
+        Message:     qc.getQuotaMessage("EC2 instances", status, float64(runningInstances), quotaValue),
         CanIncrease: onDemandQuota.Adjustable,
     })
 
@@ -129,15 +134,19 @@ func (qc *QuotaChecker) checkEC2Quotas(ctx context.Context) ([]QuotaStatus, erro
         keyPairs, err := qc.ec2Client.DescribeKeyPairs(ctx, &ec2.DescribeKeyPairsInput{})
         if err == nil {
             keyPairCount := len(keyPairs.KeyPairs)
-            status := qc.evaluateQuotaStatus(float64(keyPairCount), keyPairQuota.Value)
+            keyPairQuotaValue := float64(0)
+            if keyPairQuota.Value != nil {
+                keyPairQuotaValue = *keyPairQuota.Value
+            }
+            status := qc.evaluateQuotaStatus(float64(keyPairCount), keyPairQuotaValue)
             quotas = append(quotas, QuotaStatus{
                 ServiceName: "EC2",
                 QuotaName:   "Key Pairs",
                 Current:     float64(keyPairCount),
-                Limit:       keyPairQuota.Value,
-                Usage:       (float64(keyPairCount) / keyPairQuota.Value) * 100,
+                Limit:       keyPairQuotaValue,
+                Usage:       (float64(keyPairCount) / keyPairQuotaValue) * 100,
                 Status:      status,
-                Message:     qc.getQuotaMessage("EC2 key pairs", status, float64(keyPairCount), keyPairQuota.Value),
+                Message:     qc.getQuotaMessage("EC2 key pairs", status, float64(keyPairCount), keyPairQuotaValue),
                 CanIncrease: keyPairQuota.Adjustable,
             })
         }
@@ -158,14 +167,18 @@ func (qc *QuotaChecker) checkECRQuotas(ctx context.Context) ([]QuotaStatus, erro
 
     // Get current repository count (this would need ECR client)
     // For now, we'll estimate based on platform needs
+    repoQuotaValue := float64(0)
+    if repoQuota.Value != nil {
+        repoQuotaValue = *repoQuota.Value
+    }
     quotas = append(quotas, QuotaStatus{
         ServiceName: "ECR",
         QuotaName:   "Repositories per Region",
         Current:     1, // We need at least 1 for geoschem
-        Limit:       repoQuota.Value,
-        Usage:       (1.0 / repoQuota.Value) * 100,
+        Limit:       repoQuotaValue,
+        Usage:       (1.0 / repoQuotaValue) * 100,
         Status:      "OK",
-        Message:     fmt.Sprintf("ECR repositories: 1 used of %.0f available", repoQuota.Value),
+        Message:     fmt.Sprintf("ECR repositories: 1 used of %.0f available", repoQuotaValue),
         CanIncrease: repoQuota.Adjustable,
     })
 
@@ -182,14 +195,18 @@ func (qc *QuotaChecker) checkBatchQuotas(ctx context.Context) ([]QuotaStatus, er
         return nil, fmt.Errorf("getting Batch compute environment quota: %w", err)
     }
 
+    computeEnvQuotaValue := float64(0)
+    if computeEnvQuota.Value != nil {
+        computeEnvQuotaValue = *computeEnvQuota.Value
+    }
     quotas = append(quotas, QuotaStatus{
         ServiceName: "Batch",
         QuotaName:   "Compute Environments per Region",
         Current:     1, // We need at least 1
-        Limit:       computeEnvQuota.Value,
-        Usage:       (1.0 / computeEnvQuota.Value) * 100,
+        Limit:       computeEnvQuotaValue,
+        Usage:       (1.0 / computeEnvQuotaValue) * 100,
         Status:      "OK",
-        Message:     fmt.Sprintf("Batch compute environments: 1 needed of %.0f available", computeEnvQuota.Value),
+        Message:     fmt.Sprintf("Batch compute environments: 1 needed of %.0f available", computeEnvQuotaValue),
         CanIncrease: computeEnvQuota.Adjustable,
     })
 
