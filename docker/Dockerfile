@@ -14,7 +14,7 @@ LABEL compiler_version=${COMPILER_VERSION}
 
 # Update system and install basic tools
 RUN dnf update -y && \
-    dnf install -y \
+    dnf install -y --allowerasing \
         gcc \
         gcc-gfortran \
         git \
