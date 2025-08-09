@@ -32,6 +32,8 @@ func main() {
     )
     flag.Parse()
 
+    ctx := context.Background()
+
     // Handle version flag
     if *version {
         fmt.Println(common.GetVersionInfo())
@@ -71,8 +73,6 @@ func main() {
         fmt.Println(common.FormatRecommendations(recommendations, workload))
         os.Exit(0)
     }
-
-    ctx := context.Background()
     
     // Load configuration
     config, err := common.LoadBuildConfig(*configFile)
