@@ -1,0 +1,38 @@
+aws:
+  profile: "aws"
+  region: "us-east-1"
+  key_pair: "geoschem-builder-key"
+  security_group: "sg-geoschem-builder"
+  subnet_id: "subnet-xxxxxxxx"
+
+batch:
+  compute_environment: "geoschem-compute"
+  job_queue: "geoschem-queue"
+  job_definition: "geoschem-job"
+
+architectures:
+  x86_64:
+    instance_type: c5.2xlarge
+    compilers:
+      intel2024:
+        version: "2024.1"
+        mpi_options: [intelmpi, openmpi]
+      gcc13:
+        version: "13.2.0"
+        mpi_options: [openmpi, mpich]
+      aocc4:
+        version: "4.1.0"
+        mpi_options: [openmpi]
+  arm64:
+    instance_type: c6g.2xlarge
+    compilers:
+      gcc13:
+        version: "13.2.0"
+        mpi_options: [openmpi, mpich]
+
+mpi_versions:
+  intelmpi: "2021.10"
+  openmpi: "5.0.1"
+  mpich: "4.1.2"
+
+ecr_repository: "your-account.dkr.ecr.us-east-1.amazonaws.com/geoschem"

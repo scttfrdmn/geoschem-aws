@@ -1,0 +1,11 @@
+aws:
+  profile: "aws"
+  region: "us-east-1"
+  key_pair: "geoschem-builder-key"
+  security_group: "sg-geoschem-builder"
+  subnet_id: "subnet-xxxxxxxx"
+  
+batch:
+  compute_environment: "geoschem-compute"
+  job_queue: "geoschem-queue"
+  job_definition: "geoschem-job"

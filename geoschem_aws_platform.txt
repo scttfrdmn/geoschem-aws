@@ -1,0 +1,913 @@
+geoschem-aws-platform/
+├── README.md
+├── go.mod
+├── go.sum
+├── .gitignore
+├── config/
+│   ├── build-matrix.yaml
+│   └── aws-config.yaml
+├── cmd/
+│   ├── builder/
+│   │   └── main.go
+│   └── deployer/
+│       └── main.go
+├── internal/
+│   ├── builder/
+│   │   ├── builder.go
+│   │   ├── ec2.go
+│   │   ├── ecr.go
+│   │   └── docker.go
+│   ├── batch/
+│   │   ├── batch.go
+│   │   ├── compute.go
+│   │   └── jobs.go
+│   └── common/
+│       ├── aws.go
+│       └── config.go
+├── docker/
+│   ├── Dockerfile.geoschem
+│   └── scripts/
+│       ├── setup-spack.sh
+│       └── build-geoschem.sh
+├── terraform/
+│   ├── main.tf
+│   ├── batch.tf
+│   ├── iam.tf
+│   ├── ecr.tf
+│   └── variables.tf
+├── web/
+│   ├── index.html
+│   ├── css/
+│   │   └── style.css
+│   ├── js/
+│   │   ├── app.js
+│   │   ├── aws-config.js
+│   │   └── batch-client.js
+│   └── assets/
+│       └── favicon.ico
+├── scripts/
+│   ├── deploy.sh
+│   ├── build-all.sh
+│   └── cleanup.sh
+└── examples/
+    ├── sample-config.json
+    └── test-run.json
+
+## File Contents:
+
+### README.md
+```markdown
+# GeosChem AWS Platform
+
+A simple platform for running GeosChem atmospheric chemistry simulations on AWS using containerized builds and AWS Batch.
+
+## Features
+- Pre-built GeosChem containers with multiple compiler/MPI combinations
+- Simple web interface for job submission and monitoring
+- Automated container building on native AWS instances
+- Integration with AWS Open Data for input datasets
+
+## Quick Start
+
+1. **Setup AWS Profile**
+   ```bash
+   aws configure --profile aws
+   ```
+
+2. **Deploy Infrastructure**
+   ```bash
+   cd terraform
+   terraform init
+   terraform apply
+   ```
+
+3. **Build Containers**
+   ```bash
+   go run cmd/builder/main.go --profile aws --build-matrix
+   ```
+
+4. **Deploy Web Interface**
+   ```bash
+   ./scripts/deploy.sh
+   ```
+
+## Container Variants
+
+### x86_64 Architecture
+- `geoschem:intel2024-intelmpi`
+- `geoschem:intel2024-openmpi`
+- `geoschem:gcc13-openmpi`
+- `geoschem:gcc13-mpich`
+- `geoschem:aocc4-openmpi`
+
+### ARM64 Architecture (Graviton)
+- `geoschem:gcc13-openmpi-arm64`
+- `geoschem:gcc13-mpich-arm64`
+
+## Usage
+
+### Building Containers
+```bash
+# Build single combination
+./geoschem-builder --profile aws --arch x86_64 --compiler gcc13 --mpi openmpi
+
+# Build all for architecture
+./geoschem-builder --profile aws --arch x86_64 --build-all
+
+# Build complete matrix
+./geoschem-builder --profile aws --build-matrix
+```
+
+### Running Simulations
+Access the web interface at your S3 bucket URL and submit jobs through the simple form.
+```
+
+### go.mod
+```go
+module github.com/your-org/geoschem-aws-platform
+
+go 1.21
+
+require (
+    github.com/aws/aws-sdk-go-v2 v1.24.0
+    github.com/aws/aws-sdk-go-v2/config v1.26.1
+    github.com/aws/aws-sdk-go-v2/service/batch v1.30.0
+    github.com/aws/aws-sdk-go-v2/service/ec2 v1.141.0
+    github.com/aws/aws-sdk-go-v2/service/ecr v1.24.0
+    github.com/aws/aws-sdk-go-v2/service/s3 v1.48.0
+    github.com/spf13/cobra v1.8.0
+    github.com/spf13/viper v1.18.2
+    gopkg.in/yaml.v3 v3.0.1
+)
+```
+
+### .gitignore
+```
+# Binaries
+/geoschem-builder
+/geoschem-deployer
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# AWS
+.aws/
+*.pem
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+```
+
+### config/build-matrix.yaml
+```yaml
+architectures:
+  x86_64:
+    instance_type: c5.2xlarge
+    compilers:
+      intel2024:
+        version: "2024.1"
+        mpi_options: [intelmpi, openmpi]
+      gcc13:
+        version: "13.2.0"
+        mpi_options: [openmpi, mpich]
+      aocc4:
+        version: "4.1.0"
+        mpi_options: [openmpi]
+  arm64:
+    instance_type: c6g.2xlarge
+    compilers:
+      gcc13:
+        version: "13.2.0"
+        mpi_options: [openmpi, mpich]
+
+mpi_versions:
+  intelmpi: "2021.10"
+  openmpi: "5.0.1"
+  mpich: "4.1.2"
+
+ecr_repository: "your-account.dkr.ecr.us-east-1.amazonaws.com/geoschem"
+```
+
+### config/aws-config.yaml
+```yaml
+aws:
+  profile: "aws"
+  region: "us-east-1"
+  
+build:
+  key_pair: "geoschem-builder-key"
+  security_group: "sg-geoschem-builder"
+  subnet_id: "subnet-xxxxxxxx"
+  
+batch:
+  compute_environment: "geoschem-compute"
+  job_queue: "geoschem-queue"
+  job_definition: "geoschem-job"
+```
+
+### cmd/builder/main.go
+```go
+package main
+
+import (
+    "context"
+    "flag"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/your-org/geoschem-aws-platform/internal/builder"
+    "github.com/your-org/geoschem-aws-platform/internal/common"
+)
+
+func main() {
+    var (
+        profile    = flag.String("profile", "aws", "AWS profile to use")
+        arch       = flag.String("arch", "", "Architecture: x86_64 or arm64")
+        compiler   = flag.String("compiler", "", "Compiler: intel2024, gcc13, aocc4")
+        mpi        = flag.String("mpi", "", "MPI: intelmpi, openmpi, mpich")
+        buildAll   = flag.Bool("build-all", false, "Build all combinations for specified arch")
+        buildMatrix = flag.Bool("build-matrix", false, "Build complete matrix")
+        configFile = flag.String("config", "config/build-matrix.yaml", "Config file path")
+    )
+    flag.Parse()
+
+    ctx := context.Background()
+    
+    // Load configuration
+    config, err := common.LoadBuildConfig(*configFile)
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    // Initialize builder
+    b, err := builder.New(ctx, *profile)
+    if err != nil {
+        log.Fatalf("Failed to initialize builder: %v", err)
+    }
+
+    switch {
+    case *buildMatrix:
+        err = b.BuildMatrix(ctx, config)
+    case *buildAll:
+        if *arch == "" {
+            log.Fatal("--arch required with --build-all")
+        }
+        err = b.BuildAllForArch(ctx, config, *arch)
+    default:
+        if *arch == "" || *compiler == "" || *mpi == "" {
+            log.Fatal("--arch, --compiler, and --mpi required for single build")
+        }
+        err = b.BuildSingle(ctx, config, *arch, *compiler, *mpi)
+    }
+
+    if err != nil {
+        log.Fatalf("Build failed: %v", err)
+    }
+
+    fmt.Println("Build completed successfully!")
+}
+```
+
+### internal/builder/builder.go
+```go
+package builder
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/batch"
+    "github.com/aws/aws-sdk-go-v2/service/ec2"
+    "github.com/aws/aws-sdk-go-v2/service/ecr"
+    
+    "github.com/your-org/geoschem-aws-platform/internal/common"
+)
+
+type Builder struct {
+    ec2Client *ec2.Client
+    ecrClient *ecr.Client
+    profile   string
+}
+
+type BuildRequest struct {
+    Architecture string
+    Compiler     string
+    MPI          string
+    Tag          string
+}
+
+func New(ctx context.Context, profile string) (*Builder, error) {
+    cfg, err := config.LoadDefaultConfig(ctx, 
+        config.WithSharedConfigProfile(profile),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("loading AWS config: %w", err)
+    }
+
+    return &Builder{
+        ec2Client: ec2.NewFromConfig(cfg),
+        ecrClient: ecr.NewFromConfig(cfg),
+        profile:   profile,
+    }, nil
+}
+
+func (b *Builder) BuildMatrix(ctx context.Context, config *common.BuildConfig) error {
+    fmt.Println("Building complete matrix...")
+    
+    for arch, archConfig := range config.Architectures {
+        if err := b.BuildAllForArch(ctx, config, arch); err != nil {
+            return fmt.Errorf("building arch %s: %w", arch, err)
+        }
+    }
+    
+    return nil
+}
+
+func (b *Builder) BuildAllForArch(ctx context.Context, config *common.BuildConfig, arch string) error {
+    archConfig, exists := config.Architectures[arch]
+    if !exists {
+        return fmt.Errorf("unknown architecture: %s", arch)
+    }
+
+    fmt.Printf("Building all combinations for %s...\n", arch)
+    
+    for compiler, compilerConfig := range archConfig.Compilers {
+        for _, mpi := range compilerConfig.MPIOptions {
+            if err := b.BuildSingle(ctx, config, arch, compiler, mpi); err != nil {
+                return fmt.Errorf("building %s-%s-%s: %w", arch, compiler, mpi, err)
+            }
+        }
+    }
+    
+    return nil
+}
+
+func (b *Builder) BuildSingle(ctx context.Context, config *common.BuildConfig, arch, compiler, mpi string) error {
+    tag := fmt.Sprintf("%s-%s", compiler, mpi)
+    if arch == "arm64" {
+        tag += "-arm64"
+    }
+    
+    fmt.Printf("Building: %s\n", tag)
+    
+    buildReq := BuildRequest{
+        Architecture: arch,
+        Compiler:     compiler,
+        MPI:          mpi,
+        Tag:          tag,
+    }
+    
+    // Launch EC2 instance
+    instanceID, err := b.launchBuildInstance(ctx, config, arch)
+    if err != nil {
+        return fmt.Errorf("launching instance: %w", err)
+    }
+    
+    defer func() {
+        if err := b.terminateInstance(ctx, instanceID); err != nil {
+            fmt.Printf("Warning: failed to terminate instance %s: %v\n", instanceID, err)
+        }
+    }()
+    
+    // Wait for instance to be ready
+    if err := b.waitForInstance(ctx, instanceID); err != nil {
+        return fmt.Errorf("waiting for instance: %w", err)
+    }
+    
+    // Execute build
+    if err := b.executeBuild(ctx, instanceID, buildReq, config); err != nil {
+        return fmt.Errorf("executing build: %w", err)
+    }
+    
+    fmt.Printf("Successfully built: %s\n", tag)
+    return nil
+}
+```
+
+### internal/builder/ec2.go
+```go
+package builder
+
+import (
+    "context"
+    "fmt"
+    "time"
+    "encoding/base64"
+
+    "github.com/aws/aws-sdk-go-v2/service/ec2"
+    "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+    "github.com/aws/aws-sdk-go-v2/aws"
+    
+    "github.com/your-org/geoschem-aws-platform/internal/common"
+)
+
+func (b *Builder) launchBuildInstance(ctx context.Context, config *common.BuildConfig, arch string) (string, error) {
+    archConfig := config.Architectures[arch]
+    
+    // Select AMI based on architecture
+    var amiID string
+    switch arch {
+    case "x86_64":
+        amiID = "ami-0c02fb55956c7d316" // Amazon Linux 2 x86_64
+    case "arm64":
+        amiID = "ami-0f69dd1d0d03ad669" // Amazon Linux 2 ARM64
+    default:
+        return "", fmt.Errorf("unsupported architecture: %s", arch)
+    }
+    
+    userData := b.generateUserData(config)
+    
+    input := &ec2.RunInstancesInput{
+        ImageId:      aws.String(amiID),
+        InstanceType: types.InstanceType(archConfig.InstanceType),
+        MinCount:     aws.Int32(1),
+        MaxCount:     aws.Int32(1),
+        KeyName:      aws.String(config.AWS.KeyPair),
+        SecurityGroupIds: []string{config.AWS.SecurityGroup},
+        SubnetId:     aws.String(config.AWS.SubnetID),
+        UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(userData))),
+        TagSpecifications: []types.TagSpecification{
+            {
+                ResourceType: types.ResourceTypeInstance,
+                Tags: []types.Tag{
+                    {Key: aws.String("Name"), Value: aws.String("geoschem-builder")},
+                    {Key: aws.String("Project"), Value: aws.String("geoschem-aws")},
+                },
+            },
+        },
+    }
+    
+    result, err := b.ec2Client.RunInstances(ctx, input)
+    if err != nil {
+        return "", fmt.Errorf("launching instance: %w", err)
+    }
+    
+    instanceID := *result.Instances[0].InstanceId
+    fmt.Printf("Launched instance: %s\n", instanceID)
+    return instanceID, nil
+}
+
+func (b *Builder) generateUserData(config *common.BuildConfig) string {
+    return `#!/bin/bash
+yum update -y
+yum install -y docker git
+
+# Install Docker
+systemctl start docker
+systemctl enable docker
+usermod -a -G docker ec2-user
+
+# Install AWS CLI v2
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+# Configure ECR login
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ` + config.ECRRepository + `
+
+echo "Instance setup complete" > /tmp/setup-complete
+`
+}
+
+func (b *Builder) waitForInstance(ctx context.Context, instanceID string) error {
+    fmt.Printf("Waiting for instance %s to be ready...\n", instanceID)
+    
+    waiter := ec2.NewInstanceRunningWaiter(b.ec2Client)
+    return waiter.Wait(ctx, &ec2.DescribeInstancesInput{
+        InstanceIds: []string{instanceID},
+    }, 5*time.Minute)
+}
+
+func (b *Builder) terminateInstance(ctx context.Context, instanceID string) error {
+    fmt.Printf("Terminating instance: %s\n", instanceID)
+    
+    _, err := b.ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+        InstanceIds: []string{instanceID},
+    })
+    return err
+}
+```
+
+### docker/Dockerfile.geoschem
+```dockerfile
+ARG ARCH=x86_64
+ARG COMPILER=gcc
+ARG MPI=openmpi
+ARG SPACK_VERSION=0.21
+
+FROM spack/ubuntu-jammy:${SPACK_VERSION} as builder
+
+ARG COMPILER
+ARG MPI
+ARG ARCH
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl wget git build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create Spack environment
+RUN spack env create geoschem
+
+# Activate environment and add packages
+RUN . /opt/spack/share/spack/setup-env.sh && \
+    spack env activate geoschem && \
+    spack add geoschem%${COMPILER} ^${MPI} && \
+    spack concretize -f && \
+    spack install --fail-fast
+
+# Production stage
+FROM ubuntu:22.04
+
+# Copy Spack environment
+COPY --from=builder /opt/spack /opt/spack
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup environment
+ENV SPACK_ROOT=/opt/spack
+ENV PATH=$SPACK_ROOT/bin:$PATH
+
+# Activate Spack environment
+RUN . /opt/spack/share/spack/setup-env.sh && \
+    spack env activate geoschem
+
+WORKDIR /geoschem
+
+# Entry point script
+COPY scripts/run-geoschem.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/run-geoschem.sh
+
+ENTRYPOINT ["/usr/local/bin/run-geoschem.sh"]
+```
+
+### terraform/main.tf
+```hcl
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  profile = var.aws_profile
+  region  = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+```
+
+### terraform/variables.tf
+```hcl
+variable "aws_profile" {
+  description = "AWS profile to use"
+  type        = string
+  default     = "aws"
+}
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name prefix"
+  type        = string
+  default     = "geoschem"
+}
+
+variable "s3_bucket_name" {
+  description = "S3 bucket for results and web hosting"
+  type        = string
+  default     = ""
+}
+```
+
+### web/index.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeosChem AWS Platform</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1.24.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>GeosChem AWS Platform</h1>
+            <p>Simple atmospheric chemistry modeling on AWS</p>
+        </header>
+
+        <main>
+            <div class="form-section">
+                <h2>Submit New Simulation</h2>
+                <form id="job-form">
+                    <div class="form-group">
+                        <label for="job-name">Job Name:</label>
+                        <input type="text" id="job-name" required>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="compiler">Compiler:</label>
+                            <select id="compiler" required>
+                                <option value="">Select Compiler</option>
+                                <option value="intel2024">Intel OneAPI 2024</option>
+                                <option value="gcc13">GCC 13</option>
+                                <option value="aocc4">AMD AOCC 4</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="mpi">MPI Implementation:</label>
+                            <select id="mpi" required>
+                                <option value="">Select MPI</option>
+                                <option value="intelmpi">Intel MPI</option>
+                                <option value="openmpi">OpenMPI</option>
+                                <option value="mpich">MPICH</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="architecture">Architecture:</label>
+                            <select id="architecture" required>
+                                <option value="x86_64">x86_64 (Intel/AMD)</option>
+                                <option value="arm64">ARM64 (Graviton)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="vcpus">vCPUs:</label>
+                            <select id="vcpus" required>
+                                <option value="2">2 vCPUs</option>
+                                <option value="4">4 vCPUs</option>
+                                <option value="8">8 vCPUs</option>
+                                <option value="16">16 vCPUs</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="s3-output">Output S3 Path:</label>
+                        <input type="text" id="s3-output" placeholder="s3://your-bucket/results/" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="simulation-time">Simulation Length (hours):</label>
+                        <input type="number" id="simulation-time" value="24" min="1" max="168" required>
+                    </div>
+
+                    <button type="submit" id="submit-btn">Submit Job</button>
+                </form>
+            </div>
+
+            <div class="status-section">
+                <h2>Job Status</h2>
+                <div id="jobs-list">
+                    <p>No jobs submitted yet.</p>
+                </div>
+                <button id="refresh-btn">Refresh Status</button>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/aws-config.js"></script>
+    <script src="js/batch-client.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
+```
+
+### web/css/style.css
+```css
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f5f5f5;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+header h1 {
+    color: #2c3e50;
+    margin-bottom: 10px;
+}
+
+main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+}
+
+.form-section, .status-section {
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: #555;
+}
+
+input, select {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+input:focus, select:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
+button {
+    background: #3498db;
+    color: white;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+button:hover {
+    background: #2980b9;
+}
+
+button:disabled {
+    background: #bdc3c7;
+    cursor: not-allowed;
+}
+
+.job-item {
+    padding: 15px;
+    margin: 10px 0;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border-left: 4px solid #3498db;
+}
+
+.job-status {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 12px;
+}
+
+.status-running { color: #f39c12; }
+.status-succeeded { color: #27ae60; }
+.status-failed { color: #e74c3c; }
+
+@media (max-width: 768px) {
+    main {
+        grid-template-columns: 1fr;
+    }
+    
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+}
+```
+
+### scripts/deploy.sh
+```bash
+#!/bin/bash
+
+set -e
+
+PROFILE="aws"
+REGION="us-east-1"
+BUCKET_NAME="geoschem-platform-$(date +%s)"
+
+echo "Deploying GeosChem AWS Platform..."
+
+# Create S3 bucket for web hosting
+echo "Creating S3 bucket: $BUCKET_NAME"
+aws s3 mb s3://$BUCKET_NAME --profile $PROFILE --region $REGION
+
+# Configure bucket for static website hosting
+aws s3 website s3://$BUCKET_NAME \
+    --index-document index.html \
+    --profile $PROFILE
+
+# Upload web files
+echo "Uploading web files..."
+aws s3 sync web/ s3://$BUCKET_NAME/ \
+    --profile $PROFILE \
+    --delete
+
+# Set public read permissions
+aws s3api put-bucket-policy \
+    --bucket $BUCKET_NAME \
+    --policy '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "PublicReadGetObject",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": "arn:aws:s3:::'$BUCKET_NAME'/*"
+            }
+        ]
+    }' \
+    --profile $PROFILE
+
+echo "Deployment complete!"
+echo "Website URL: http://$BUCKET_NAME.s3-website-$REGION.amazonaws.com"
+echo "Bucket name: $BUCKET_NAME"
+```
+
+### examples/sample-config.json
+```json
+{
+    "jobName": "test-simulation",
+    "compiler": "gcc13",
+    "mpi": "openmpi",
+    "architecture": "x86_64",
+    "vcpus": 4,
+    "memory": 8192,
+    "outputPath": "s3://my-results-bucket/test-run/",
+    "simulationLength": 24,
+    "parameters": {
+        "start_date": "2023-01-01",
+        "end_date": "2023-01-02",
+        "resolution": "4x5",
+        "simulation_type": "fullchem"
+    }
+}
+```
