@@ -1,0 +1,84 @@
+# Spack package configuration for GeosChem on AWS
+packages:
+  all:
+    # Use AWS binary cache by default - up to 20x faster
+    buildcache: true
+    compiler: [gcc@13.2.0, intel@2024.1.0]
+    providers:
+      mpi: [openmpi@5.0.1, intel-mpi@2021.10.0, mpich@4.1.2]
+      blas: [intel-mkl, openblas]
+      lapack: [intel-mkl, openblas]
+    
+  # System packages - use OS-provided versions
+  cmake:
+    buildable: False
+    externals:
+    - spec: cmake@3.20.2
+      prefix: /usr
+      
+  git:
+    buildable: False
+    externals:
+    - spec: git@2.47.3
+      prefix: /usr
+      
+  curl:
+    buildable: False
+    externals:
+    - spec: curl@7.76.1
+      prefix: /usr
+      
+  # GeosChem-specific scientific stack
+  netcdf-c:
+    variants: ['+mpi', '+parallel-netcdf', '+pic']
+    
+  netcdf-fortran:
+    variants: ['+pic']
+    
+  hdf5:
+    variants: ['+mpi', '+fortran', '+pic', '+szip']
+    
+  # GEOS-ESM dependencies for GCHP
+  esmf:
+    variants: ['+mpi', '+netcdf', '+pnetcdf', '+external-parallelio', '+fortran']
+    
+  # Parallel I/O for high-performance simulations  
+  parallel-netcdf:
+    variants: ['+fortran', '+pic']
+    
+  # MPI configurations
+  openmpi:
+    variants: [
+      '+cxx', '+fortran', '+legacylaunchers', '+pmi', '+pmix', 
+      '+thread_multiple', '+cuda', 'schedulers=slurm', 'fabrics=ofi'
+    ]
+    
+  intel-mpi:
+    buildable: False
+    externals:
+    - spec: intel-mpi@2021.10.0
+      modules: [intel-mpi/2021.10.0]
+      
+  mpich:
+    variants: ['+fortran', '+pmi', '+thread_multiple', 'netmod=ofi']
+    
+  # AWS-optimized builds
+  aws-cli:
+    buildable: False
+    externals:
+    - spec: aws-cli@2.15.0
+      prefix: /usr/local
+      
+  # Compiler runtime optimization
+  gcc-runtime:
+    buildable: False
+    
+  # Development tools for debugging builds
+  gdb:
+    buildable: False
+    externals:
+    - spec: gdb@10.2
+      prefix: /usr
+      
+  valgrind:
+    variants: ['+mpi', '+boost']

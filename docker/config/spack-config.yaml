@@ -1,0 +1,82 @@
+# Spack configuration optimized for AWS builds
+config:
+  install_tree:
+    root: /opt/spack
+  build_stage: /tmp/spack-stage
+  misc_cache: /opt/spack/var/spack/cache
+  build_jobs: 16
+
+# AWS Binary Cache Mirror - provides 20x faster install times
+mirrors:
+  aws_binary_cache:
+    url: https://binaries.spack.io/develop
+    signed: true
+    
+# Package preferences for GeosChem dependencies
+packages:
+  all:
+    # Prefer AWS binary cache packages
+    buildcache: True
+    
+  # Core scientific computing stack
+  netcdf-c:
+    version: ['4.9.2']
+    variants: ['+mpi', '+parallel-netcdf']
+    
+  netcdf-fortran:
+    version: ['4.6.1']
+    
+  hdf5:
+    version: ['1.14.3']
+    variants: ['+mpi', '+fortran', '+szip']
+    
+  # MPI implementations
+  openmpi:
+    version: ['5.0.1']
+    variants: ['+cuda', '+cxx', '+fortran', '+legacylaunchers']
+    
+  intel-mpi:
+    version: ['2021.10.0']
+    buildable: False  # Use external Intel MPI when available
+    
+  mpich:
+    version: ['4.1.2']
+    variants: ['+fortran']
+    
+  # Compilers
+  gcc:
+    version: ['13.2.0']
+    
+  intel-oneapi-compilers:
+    version: ['2024.1.0']
+    buildable: False  # Use external Intel compilers
+    
+  # GEOS-ESM dependencies
+  esmf:
+    version: ['8.6.0']
+    variants: ['+mpi', '+netcdf', '+pnetcdf']
+    
+  # Scientific libraries
+  blas:
+    buildable: False
+    externals:
+    - spec: blas
+      modules:
+      - mkl
+      
+  lapack:
+    buildable: False
+    externals:
+    - spec: lapack  
+      modules:
+      - mkl
+
+# Concretizer preferences
+concretizer:
+  unify: when_possible
+  reuse: dependencies
+
+# Build preferences for AWS
+buildcache:
+  install_missing_deps: true
+  check_upstream: true

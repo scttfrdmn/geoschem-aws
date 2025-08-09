@@ -1,0 +1,154 @@
+# Production GeosChem Container - Supports both Classic and GCHP modes
+FROM rockylinux:9 as base
+
+# Build arguments
+ARG COMPILER=gcc
+ARG COMPILER_VERSION=13
+ARG MPI_IMPLEMENTATION=openmpi
+ARG MPI_VERSION=5.0.1
+ARG ARCHITECTURE=x86_64
+
+# Metadata
+LABEL maintainer="GeosChem AWS Platform"
+LABEL architecture=${ARCHITECTURE}
+LABEL compiler=${COMPILER}
+LABEL compiler_version=${COMPILER_VERSION}
+LABEL mpi_implementation=${MPI_IMPLEMENTATION}
+LABEL mpi_version=${MPI_VERSION}
+LABEL geoschem_modes="classic,gchp"
+
+# Install system dependencies
+RUN dnf update -y && \
+    dnf install -y --allowerasing \
+        # Core build tools
+        gcc gcc-c++ gcc-gfortran \
+        make cmake autoconf automake libtool \
+        git wget curl \
+        # MPI and networking
+        libfabric-devel \
+        # Scientific computing libraries
+        blas-devel lapack-devel \
+        # I/O libraries  
+        hdf5-devel netcdf-devel netcdf-fortran-devel \
+        # Python for utilities
+        python3 python3-pip python3-devel \
+        # Debugging and profiling
+        gdb valgrind \
+        # AWS integration
+        awscli \
+        && dnf clean all
+
+# Install MPI implementation
+FROM base as mpi-setup
+COPY scripts/install-mpi.sh /tmp/
+RUN chmod +x /tmp/install-mpi.sh && \
+    /tmp/install-mpi.sh ${MPI_IMPLEMENTATION} ${MPI_VERSION} ${ARCHITECTURE} && \
+    rm /tmp/install-mpi.sh
+
+# Configure MPI for containerized execution
+RUN echo 'export OMPI_ALLOW_RUN_AS_ROOT=1' >> /etc/environment && \
+    echo 'export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1' >> /etc/environment && \
+    echo 'export OMPI_MCA_plm_isolated=1' >> /etc/environment
+
+# Install GeosChem dependencies
+FROM mpi-setup as geoschem-deps
+
+# Set up Spack with AWS binary cache for 20x faster builds
+RUN git clone -c feature.manyFiles=true https://github.com/spack/spack.git /opt/spack && \
+    echo 'export SPACK_ROOT=/opt/spack' >> /etc/environment && \
+    echo 'export PATH=$SPACK_ROOT/bin:$PATH' >> /etc/environment && \
+    echo 'source $SPACK_ROOT/share/spack/setup-env.sh' >> /etc/bash.bashrc
+
+# Configure Spack with AWS optimizations
+COPY config/spack-config.yaml /opt/spack/etc/spack/config.yaml
+COPY config/packages.yaml /opt/spack/etc/spack/packages.yaml
+
+# Configure AWS binary cache for faster builds
+RUN source /opt/spack/share/spack/setup-env.sh && \
+    # Add AWS binary cache mirror
+    spack mirror add aws_binary_cache https://binaries.spack.io/develop && \
+    spack buildcache keys --install --trust && \
+    # Verify cache is working
+    spack buildcache list
+
+# Install GeosChem dependencies via Spack with binary cache
+RUN source /opt/spack/share/spack/setup-env.sh && \
+    # Install from binary cache when available (20x faster)
+    spack install --cache-only netcdf-c +mpi +parallel-netcdf || \
+    spack install netcdf-c +mpi +parallel-netcdf && \
+    spack install --cache-only netcdf-fortran || \
+    spack install netcdf-fortran && \
+    spack install --cache-only hdf5 +mpi +fortran || \
+    spack install hdf5 +mpi +fortran && \
+    # GEOS-ESM libraries (required for both Classic and GCHP)
+    spack install --cache-only esmf +mpi +fortran || \
+    spack install esmf +mpi +fortran && \
+    # Install parallel I/O for GCHP performance
+    spack install --cache-only parallel-netcdf +fortran || \
+    spack install parallel-netcdf +fortran && \
+    # Cleanup build artifacts but keep binary cache
+    spack clean --stage --downloads
+
+# Build GeosChem source
+FROM geoschem-deps as geoschem-build
+
+# Create build directory structure
+RUN mkdir -p /opt/geoschem/{source,classic,gchp,data,run} && \
+    mkdir -p /workspace
+
+# Clone GeosChem source repositories
+WORKDIR /opt/geoschem/source
+RUN git clone --recursive https://github.com/geoschem/GEOSChem.git geoschem && \
+    git clone --recursive https://github.com/geoschem/GCHP.git gchp
+
+# Build GeosChem Classic
+WORKDIR /opt/geoschem/classic
+COPY scripts/build-classic.sh /tmp/
+RUN chmod +x /tmp/build-classic.sh && \
+    source /opt/spack/share/spack/setup-env.sh && \
+    /tmp/build-classic.sh ${COMPILER} ${MPI_IMPLEMENTATION} && \
+    rm /tmp/build-classic.sh
+
+# Build GCHP
+WORKDIR /opt/geoschem/gchp  
+COPY scripts/build-gchp.sh /tmp/
+RUN chmod +x /tmp/build-gchp.sh && \
+    source /opt/spack/share/spack/setup-env.sh && \
+    /tmp/build-gchp.sh ${COMPILER} ${MPI_IMPLEMENTATION} && \
+    rm /tmp/build-gchp.sh
+
+# Final runtime stage
+FROM geoschem-build as runtime
+
+# Install runtime utilities including AWS integration
+RUN pip3 install --no-cache-dir \
+        numpy scipy matplotlib \
+        xarray netcdf4 \
+        pyyaml \
+        boto3 s3fs  # AWS S3 integration for Open Data Archive
+
+# Create entrypoint and data configuration scripts
+COPY scripts/geoschem-entrypoint.sh /usr/local/bin/
+COPY scripts/run-classic.sh /usr/local/bin/
+COPY scripts/run-gchp.sh /usr/local/bin/
+COPY scripts/configure-data-sources.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/*.sh
+
+# Configure direct access to GeosChem AWS Open Data Archive
+RUN echo '# GeosChem AWS Open Data Archive integration' >> /etc/bash.bashrc && \
+    echo 'export GEOSCHEM_AWS_DATA_ROOT="s3://gcgrid"' >> /etc/bash.bashrc && \
+    echo 'export GEOSCHEM_HTTP_DATA_ROOT="https://gcgrid.s3.amazonaws.com"' >> /etc/bash.bashrc
+
+# Configure environment
+ENV GEOSCHEM_ROOT=/opt/geoschem
+ENV PATH="/opt/geoschem/classic/bin:/opt/geoschem/gchp/bin:$PATH"
+ENV OMP_NUM_THREADS=1
+ENV OMPI_ALLOW_RUN_AS_ROOT=1
+ENV OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+# Set up working directory
+WORKDIR /workspace
+
+# Default entrypoint that can handle both classic and GCHP modes
+ENTRYPOINT ["/usr/local/bin/geoschem-entrypoint.sh"]
+CMD ["--help"]

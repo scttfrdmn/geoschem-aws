@@ -12,11 +12,17 @@ This document provides expected build times for container builds across differen
 - **Instance Types**: c5.2xlarge, c5.4xlarge recommended
 
 ### ARM64 Architecture (Graviton)
-- **Total Build Time**: ~8-10 minutes
+- **Total Build Time**: ~8-10 minutes (basic), ~15-20 minutes (full production with MPI)
 - **Instance Setup**: ~4-5 minutes (more packages required)
-- **Container Build**: ~3-4 minutes
+- **Container Build**: ~3-4 minutes (basic), ~8-12 minutes (with Spack dependencies)
 - **ECR Push**: ~1 minute  
 - **Instance Types**: c6g.xlarge, c6g.2xlarge recommended
+
+### Production Containers with AWS Optimizations
+- **x86_64 with AWS Binary Cache**: ~10-15 minutes (vs 30-60 minutes without)
+- **ARM64 with AWS Binary Cache**: ~15-20 minutes (vs 45-90 minutes without)
+- **AWS Binary Cache Speedup**: Up to 20x faster for common packages
+- **Spack Dependencies**: NetCDF, HDF5, ESMF, MPI libraries from pre-built binaries
 
 ## Why ARM64 Takes Longer
 
