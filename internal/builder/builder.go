@@ -3,6 +3,7 @@ package builder
 import (
     "context"
     "fmt"
+    "strings"
     "time"
 
     "github.com/aws/aws-sdk-go-v2/config"
@@ -14,10 +15,11 @@ import (
 )
 
 type Builder struct {
-    ec2Client *ec2.Client
-    ecrClient *ecr.Client
-    profile   string
-    region    string
+    ec2Client     *ec2.Client
+    ecrClient     *ecr.Client
+    quotaChecker  *common.QuotaChecker
+    profile       string
+    region        string
 }
 
 type BuildRequest struct {
@@ -37,10 +39,11 @@ func New(ctx context.Context, profile string, region string) (*Builder, error) {
     }
 
     return &Builder{
-        ec2Client: ec2.NewFromConfig(cfg),
-        ecrClient: ecr.NewFromConfig(cfg),
-        profile:   profile,
-        region:    region,
+        ec2Client:    ec2.NewFromConfig(cfg),
+        ecrClient:    ecr.NewFromConfig(cfg),
+        quotaChecker: common.NewQuotaChecker(cfg, region),
+        profile:      profile,
+        region:       region,
     }, nil
 }
 
@@ -132,5 +135,28 @@ func (b *Builder) executeBuild(ctx context.Context, instanceID string, buildReq 
     time.Sleep(30 * time.Second)
     
     fmt.Printf("Build execution completed for %s\n", buildReq.Tag)
+    return nil
+}
+
+// CheckQuotas checks AWS service quotas relevant to the platform
+func (b *Builder) CheckQuotas(ctx context.Context) error {
+    report, err := b.quotaChecker.CheckGeoChemQuotas(ctx)
+    if err != nil {
+        return fmt.Errorf("checking quotas: %w", err)
+    }
+
+    report.PrintReport()
+
+    // Check if any critical quotas need attention
+    for _, quota := range report.Quotas {
+        if quota.Status == "CRITICAL" {
+            fmt.Printf("\n🚨 CRITICAL: %s quota is at %.1f%% usage\n", quota.QuotaName, quota.Usage)
+            if quota.CanIncrease {
+                fmt.Printf("💡 Consider requesting a quota increase for %s\n", quota.ServiceName)
+                fmt.Printf("   Use: aws support create-case --service-code=\"%s\" ...\n", strings.ToLower(quota.ServiceName))
+            }
+        }
+    }
+
     return nil
 }
