@@ -31,6 +31,7 @@ func main() {
 		ecrRepository = flag.String("ecr", "", "ECR repository URL for pushing (optional)")
 		skipBuild     = flag.Bool("skip-build", false, "Skip Docker build (test SSH only)")
 		skipPush      = flag.Bool("skip-push", false, "Skip ECR push")
+		skipUpdate    = flag.Bool("skip-update", false, "Skip system package updates (faster)")
 		skipCleanup   = flag.Bool("keep-instance", false, "Keep instance running after build")
 		listConfigs   = flag.Bool("list", false, "List available build configurations")
 	)
@@ -136,7 +137,7 @@ func main() {
 
 	// Step 2: Prepare instance 
 	fmt.Println("\n=== Step 2: Prepare Build Environment ===")
-	err = sshBuilder.PrepareInstance(ctx)
+	err = sshBuilder.PrepareInstance(ctx, *skipUpdate)
 	if err != nil {
 		log.Fatalf("Failed to prepare instance: %v", err)
 	}

@@ -113,23 +113,23 @@ func (db *DockerBuilder) prepareBuildContext(ctx context.Context, config *BuildC
 
 // buildDockerImage builds the Docker image
 func (db *DockerBuilder) buildDockerImage(ctx context.Context, config *BuildConfig, buildDir string) error {
-	// Construct build command
+	// Construct build command (Rocky Linux 9 uses Podman)
 	buildCmd := strings.Builder{}
-	buildCmd.WriteString(fmt.Sprintf("cd %s && docker build", buildDir))
+	buildCmd.WriteString(fmt.Sprintf("cd %s && podman build", buildDir))
 	
-	// Add build arguments
+	// Add build arguments (properly escape values with shell-sensitive characters)
 	for key, value := range config.BuildArgs {
-		buildCmd.WriteString(fmt.Sprintf(" --build-arg %s=%s", key, value))
+		buildCmd.WriteString(fmt.Sprintf(" --build-arg %s='%s'", key, strings.ReplaceAll(value, "'", `'"'"'`)))
 	}
 	
-	// Add platform specification for multi-arch builds
-	platformArch := config.Architecture
-	if platformArch == "arm64" {
-		platformArch = "arm64"
-	} else {
-		platformArch = "amd64"
-	}
-	buildCmd.WriteString(fmt.Sprintf(" --platform linux/%s", platformArch))
+	// Add platform specification for multi-arch builds (Podman may not need this)
+	// platformArch := config.Architecture
+	// if platformArch == "arm64" {
+	// 	platformArch = "arm64"
+	// } else {
+	// 	platformArch = "amd64"
+	// }
+	// buildCmd.WriteString(fmt.Sprintf(" --platform linux/%s", platformArch))
 	
 	// Add image tag and build context
 	buildCmd.WriteString(fmt.Sprintf(" -t %s:%s .", config.ImageName, config.ImageTag))
@@ -149,7 +149,7 @@ func (db *DockerBuilder) buildDockerImage(ctx context.Context, config *BuildConf
 func (db *DockerBuilder) tagImage(ctx context.Context, config *BuildConfig) error {
 	// Create architecture-specific tag
 	archTag := fmt.Sprintf("%s:%s-%s", config.ImageName, config.ImageTag, config.Architecture)
-	tagCmd := fmt.Sprintf("docker tag %s:%s %s", config.ImageName, config.ImageTag, archTag)
+	tagCmd := fmt.Sprintf("podman tag %s:%s %s", config.ImageName, config.ImageTag, archTag)
 	
 	output, err := db.sshClient.ExecuteCommand(ctx, tagCmd)
 	if err != nil {
@@ -157,7 +157,7 @@ func (db *DockerBuilder) tagImage(ctx context.Context, config *BuildConfig) erro
 	}
 
 	// List final images
-	listCmd := fmt.Sprintf("docker images | grep %s", config.ImageName)
+	listCmd := fmt.Sprintf("podman images | grep %s", config.ImageName)
 	output, err = db.sshClient.ExecuteCommand(ctx, listCmd)
 	if err != nil {
 		fmt.Printf("Warning: Could not list images: %v\n", err)
@@ -185,14 +185,14 @@ func (db *DockerBuilder) PushToECR(ctx context.Context, config *BuildConfig, ecr
 	archECRImageName := fmt.Sprintf("%s:%s-%s", ecrRepository, config.ImageTag, config.Architecture)
 	
 	// Tag main image
-	tagCmd := fmt.Sprintf("docker tag %s:%s %s", config.ImageName, config.ImageTag, ecrImageName)
+	tagCmd := fmt.Sprintf("podman tag %s:%s %s", config.ImageName, config.ImageTag, ecrImageName)
 	output, err := db.sshClient.ExecuteCommand(ctx, tagCmd)
 	if err != nil {
 		return fmt.Errorf("tagging for ECR failed: %w, output: %s", err, output)
 	}
 
 	// Tag architecture-specific image
-	tagArchCmd := fmt.Sprintf("docker tag %s:%s-%s %s", config.ImageName, config.ImageTag, config.Architecture, archECRImageName)
+	tagArchCmd := fmt.Sprintf("podman tag %s:%s-%s %s", config.ImageName, config.ImageTag, config.Architecture, archECRImageName)
 	output, err = db.sshClient.ExecuteCommand(ctx, tagArchCmd)
 	if err != nil {
 		return fmt.Errorf("tagging arch-specific image for ECR failed: %w, output: %s", err, output)
@@ -202,14 +202,14 @@ func (db *DockerBuilder) PushToECR(ctx context.Context, config *BuildConfig, ecr
 	fmt.Println("⬆️  Pushing images to ECR...")
 	
 	// Push main tag
-	pushCmd := fmt.Sprintf("docker push %s", ecrImageName)
+	pushCmd := fmt.Sprintf("podman push %s", ecrImageName)
 	err = db.sshClient.ExecuteCommandStream(ctx, pushCmd, os.Stdout, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("pushing main image failed: %w", err)
 	}
 
 	// Push architecture-specific tag
-	pushArchCmd := fmt.Sprintf("docker push %s", archECRImageName)
+	pushArchCmd := fmt.Sprintf("podman push %s", archECRImageName)
 	err = db.sshClient.ExecuteCommandStream(ctx, pushArchCmd, os.Stdout, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("pushing arch-specific image failed: %w", err)
@@ -232,9 +232,9 @@ func (db *DockerBuilder) loginToECR(ctx context.Context, ecrRepository string) e
 	}
 	region := parts[3]
 
-	// Get ECR login password and login to Docker
+	// Get ECR login password and login to Podman
 	loginCmd := fmt.Sprintf(
-		"aws ecr get-login-password --region %s | docker login --username AWS --password-stdin %s",
+		"aws ecr get-login-password --region %s | podman login --username AWS --password-stdin %s",
 		region, strings.Split(ecrRepository, "/")[0])
 	
 	output, err := db.sshClient.ExecuteCommand(ctx, loginCmd)
@@ -261,7 +261,7 @@ func (db *DockerBuilder) CleanupImages(ctx context.Context, config *BuildConfig)
 	}
 	
 	for _, image := range images {
-		cleanupCmd := fmt.Sprintf("docker rmi %s || true", image)
+		cleanupCmd := fmt.Sprintf("podman rmi %s || true", image)
 		_, err := db.sshClient.ExecuteCommand(ctx, cleanupCmd)
 		if err != nil {
 			fmt.Printf("Warning: Failed to remove image %s: %v\n", image, err)
@@ -269,7 +269,7 @@ func (db *DockerBuilder) CleanupImages(ctx context.Context, config *BuildConfig)
 	}
 
 	// Clean up build cache
-	_, err := db.sshClient.ExecuteCommand(ctx, "docker builder prune -f || true")
+	_, err := db.sshClient.ExecuteCommand(ctx, "podman system prune -f || true")
 	if err != nil {
 		fmt.Printf("Warning: Failed to prune build cache: %v\n", err)
 	}
@@ -281,7 +281,7 @@ func (db *DockerBuilder) CleanupImages(ctx context.Context, config *BuildConfig)
 // GetImageInfo returns information about built images
 func (db *DockerBuilder) GetImageInfo(ctx context.Context, config *BuildConfig) (string, error) {
 	// Get image information
-	infoCmd := fmt.Sprintf("docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}' | grep %s || echo 'No images found'", config.ImageName)
+	infoCmd := fmt.Sprintf("podman images --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}' | grep %s || echo 'No images found'", config.ImageName)
 	
 	output, err := db.sshClient.ExecuteCommand(ctx, infoCmd)
 	if err != nil {

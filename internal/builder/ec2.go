@@ -34,6 +34,9 @@ func (b *Builder) launchBuildInstance(ctx context.Context, config *common.BuildC
         SecurityGroupIds: []string{config.AWS.SecurityGroup},
         SubnetId:     aws.String(config.AWS.SubnetID),
         UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(userData))),
+        IamInstanceProfile: &types.IamInstanceProfileSpecification{
+            Name: aws.String("geoschem-ec2-builder-profile"), // IAM instance profile for ECR access
+        },
         TagSpecifications: []types.TagSpecification{
             {
                 ResourceType: types.ResourceTypeInstance,

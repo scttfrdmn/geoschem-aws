@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,6 +19,7 @@ type SSHBuilder struct {
 	*Builder
 	keyPairManager *ssh.KeyPairManager
 	sshClient      *ssh.Client
+	instanceID     string
 }
 
 // NewSSHBuilder creates a new SSH-enabled builder
@@ -50,6 +52,7 @@ func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConf
 		return "", fmt.Errorf("launching build instance: %w", err)
 	}
 
+	sb.instanceID = instanceID // Store for later use
 	fmt.Printf("Launched build instance: %s\n", instanceID)
 
 	// Wait for instance to be running and get public IP
@@ -145,46 +148,80 @@ func (sb *SSHBuilder) UploadFile(ctx context.Context, localPath, remotePath stri
 }
 
 // PrepareInstance sets up the instance for building (install Docker, etc.)
-func (sb *SSHBuilder) PrepareInstance(ctx context.Context) error {
+func (sb *SSHBuilder) PrepareInstance(ctx context.Context, skipUpdate bool) error {
 	fmt.Println("Preparing build instance...")
 
-	// Update system packages
-	fmt.Println("Updating system packages...")
-	err := sb.ExecuteCommandStream(ctx, "sudo dnf update -y")
-	if err != nil {
-		return fmt.Errorf("updating packages: %w", err)
+	if !skipUpdate {
+		// Clean package cache and update system packages with conflict resolution
+		fmt.Println("Cleaning package cache and updating system packages...")
+		err := sb.ExecuteCommandStream(ctx, "sudo dnf clean all && sudo dnf update -y --allowerasing")
+		if err != nil {
+			return fmt.Errorf("updating packages: %w", err)
+		}
+
+		// Check if kernel was updated and reboot if necessary
+		fmt.Println("Checking if reboot is needed...")
+		needsReboot, err := sb.ExecuteCommand(ctx, "dnf needs-restarting -r; echo $?")
+		if err != nil {
+			fmt.Printf("Warning: Could not check reboot status: %v\n", err)
+		} else if strings.Contains(needsReboot, "1") {
+			fmt.Println("Kernel update detected, rebooting instance...")
+			// Initiate reboot
+			_, err := sb.ExecuteCommand(ctx, "sudo reboot")
+			if err != nil {
+				fmt.Printf("Warning: Reboot command failed: %v\n", err)
+			}
+			
+			// Wait for reboot and reconnect
+			fmt.Println("Waiting for instance to reboot...")
+			time.Sleep(30 * time.Second) // Wait for reboot to begin
+			
+			// Re-establish SSH connection
+			publicIP, err := sb.waitForInstanceReady(ctx, sb.instanceID)
+			if err != nil {
+				return fmt.Errorf("waiting for instance after reboot: %w", err)
+			}
+			
+			err = sb.sshClient.WaitForConnection(ctx, publicIP, 30)
+			if err != nil {
+				return fmt.Errorf("reconnecting SSH after reboot: %w", err)
+			}
+			
+			fmt.Println("Successfully reconnected after reboot!")
+		}
+	} else {
+		fmt.Println("Skipping system package update for faster testing...")
 	}
 
-	// Install Docker
-	fmt.Println("Installing Docker...")
-	dockerInstall := `
-		sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo &&
-		sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin &&
-		sudo systemctl start docker &&
-		sudo systemctl enable docker &&
-		sudo usermod -aG docker rocky
+	// Install Docker/Podman (Rocky Linux 9 uses Podman with Docker compatibility)
+	fmt.Println("Installing container runtime...")
+	containerInstall := `
+		sudo dnf install -y podman git unzip &&
+		sudo systemctl enable --now podman.socket &&
+		sudo usermod -aG wheel rocky
 	`
-	err = sb.ExecuteCommandStream(ctx, dockerInstall)
+	err := sb.ExecuteCommandStream(ctx, containerInstall)
 	if err != nil {
-		return fmt.Errorf("installing Docker: %w", err)
+		return fmt.Errorf("installing container runtime: %w", err)
 	}
 
-	// Install AWS CLI
-	fmt.Println("Installing AWS CLI...")
+	// Install AWS CLI 2.x (as requested by user - dnf version is old)
+	fmt.Println("Installing AWS CLI 2.x...")
 	awsInstall := `
 		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" &&
 		unzip awscliv2.zip &&
 		sudo ./aws/install &&
-		rm -rf aws awscliv2.zip
+		rm -rf aws awscliv2.zip &&
+		aws --version
 	`
 	err = sb.ExecuteCommandStream(ctx, awsInstall)
 	if err != nil {
 		return fmt.Errorf("installing AWS CLI: %w", err)
 	}
 
-	// Install git and other build tools
+	// Install additional build tools
 	fmt.Println("Installing build tools...")
-	err = sb.ExecuteCommandStream(ctx, "sudo dnf install -y git make gcc gcc-gfortran")
+	err = sb.ExecuteCommandStream(ctx, "sudo dnf install -y make gcc gcc-gfortran")
 	if err != nil {
 		return fmt.Errorf("installing build tools: %w", err)
 	}
@@ -193,24 +230,31 @@ func (sb *SSHBuilder) PrepareInstance(ctx context.Context) error {
 	return nil
 }
 
-// TestDockerConnection verifies Docker is working
+// TestDockerConnection verifies container runtime is working
 func (sb *SSHBuilder) TestDockerConnection(ctx context.Context) error {
-	fmt.Println("Testing Docker connection...")
+	fmt.Println("Testing container runtime...")
 	
-	// Test basic Docker command (need to re-login for group changes)
-	_, err := sb.ExecuteCommand(ctx, "newgrp docker << EOF\ndocker --version\nEOF")
+	// Test basic container command (Rocky Linux 9 uses Podman)
+	_, err := sb.ExecuteCommand(ctx, "podman --version")
 	if err != nil {
-		return fmt.Errorf("testing Docker: %w", err)
+		return fmt.Errorf("testing container runtime: %w", err)
 	}
 
-	// Pull a small test image
-	fmt.Println("Testing Docker pull...")
-	err = sb.ExecuteCommandStream(ctx, "newgrp docker << EOF\ndocker pull hello-world\nEOF")
+	// Enable Docker compatibility alias if not already set
+	fmt.Println("Setting up Docker compatibility alias...")
+	err = sb.ExecuteCommandStream(ctx, "sudo dnf install -y podman-docker")
 	if err != nil {
-		return fmt.Errorf("testing Docker pull: %w", err)
+		fmt.Printf("Warning: Could not install docker alias: %v\n", err)
 	}
 
-	fmt.Println("Docker connection verified!")
+	// Pull and run a small test image using podman
+	fmt.Println("Testing container pull and run...")
+	err = sb.ExecuteCommandStream(ctx, "podman run --rm hello-world")
+	if err != nil {
+		return fmt.Errorf("testing container functionality: %w", err)
+	}
+
+	fmt.Println("Container runtime verified!")
 	return nil
 }
 
