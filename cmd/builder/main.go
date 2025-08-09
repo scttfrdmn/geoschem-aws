@@ -8,8 +8,8 @@ import (
     "os"
 
     "github.com/aws/aws-sdk-go-v2/config"
-    "github.com/your-org/geoschem-aws-platform/internal/builder"
-    "github.com/your-org/geoschem-aws-platform/internal/common"
+    "github.com/scttfrdmn/geoschem-aws/internal/builder"
+    "github.com/scttfrdmn/geoschem-aws/internal/common"
 )
 
 func main() {

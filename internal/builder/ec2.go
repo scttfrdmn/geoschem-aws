@@ -11,7 +11,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/service/ec2/types"
     "github.com/aws/aws-sdk-go-v2/aws"
     
-    "github.com/your-org/geoschem-aws-platform/internal/common"
+    "github.com/scttfrdmn/geoschem-aws/internal/common"
 )
 
 func (b *Builder) launchBuildInstance(ctx context.Context, config *common.BuildConfig, arch string) (string, error) {

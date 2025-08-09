@@ -1,0 +1,246 @@
+package builder
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
+	"github.com/scttfrdmn/geoschem-aws/internal/common"
+	"github.com/scttfrdmn/geoschem-aws/internal/ssh"
+)
+
+type SSHBuilder struct {
+	*Builder
+	keyPairManager *ssh.KeyPairManager
+	sshClient      *ssh.Client
+}
+
+// NewSSHBuilder creates a new SSH-enabled builder
+func NewSSHBuilder(cfg aws.Config) *SSHBuilder {
+	builder := New(cfg)
+	return &SSHBuilder{
+		Builder:        builder,
+		keyPairManager: ssh.NewKeyPairManager(builder.ec2Client),
+	}
+}
+
+// BuildWithSSH launches an instance and establishes SSH connection for building
+func (sb *SSHBuilder) BuildWithSSH(ctx context.Context, config *common.BuildConfig, arch string) error {
+	// Setup key pair for SSH access
+	keyPairName := fmt.Sprintf("geoschem-builder-%s", arch)
+	privateKeyPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s.pem", keyPairName))
+
+	// Ensure key pair exists
+	err := sb.keyPairManager.GetOrCreateKeyPair(ctx, keyPairName, privateKeyPath)
+	if err != nil {
+		return fmt.Errorf("setting up key pair: %w", err)
+	}
+
+	// Update config to use our key pair
+	config.AWS.KeyPair = keyPairName
+
+	// Launch the build instance
+	instanceID, err := sb.launchBuildInstance(ctx, config, arch)
+	if err != nil {
+		return fmt.Errorf("launching build instance: %w", err)
+	}
+
+	fmt.Printf("Launched build instance: %s\n", instanceID)
+
+	// Wait for instance to be running and get public IP
+	publicIP, err := sb.waitForInstanceReady(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("waiting for instance: %w", err)
+	}
+
+	fmt.Printf("Instance ready with public IP: %s\n", publicIP)
+
+	// Setup SSH client
+	sb.sshClient, err = ssh.NewClient(publicIP, "rocky", privateKeyPath)
+	if err != nil {
+		return fmt.Errorf("creating SSH client: %w", err)
+	}
+
+	// Wait for SSH to be available (instance needs to boot)
+	fmt.Println("Waiting for SSH connection...")
+	err = sb.sshClient.WaitForConnection(ctx, publicIP, 30) // 30 retries = ~5 minutes
+	if err != nil {
+		return fmt.Errorf("establishing SSH connection: %w", err)
+	}
+
+	fmt.Println("SSH connection established!")
+
+	// Test SSH connection
+	err = sb.sshClient.TestConnection(ctx)
+	if err != nil {
+		return fmt.Errorf("testing SSH connection: %w", err)
+	}
+
+	fmt.Println("SSH connection verified!")
+	return nil
+}
+
+// waitForInstanceReady waits for instance to be running and returns public IP
+func (sb *SSHBuilder) waitForInstanceReady(ctx context.Context, instanceID string) (string, error) {
+	waiter := ec2.NewInstanceRunningWaiter(sb.ec2Client)
+	
+	// Wait for instance to be running (max 5 minutes)
+	err := waiter.Wait(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	}, 5*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("waiting for instance to be running: %w", err)
+	}
+
+	// Get instance details to retrieve public IP
+	result, err := sb.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describing instance: %w", err)
+	}
+
+	if len(result.Reservations) == 0 || len(result.Reservations[0].Instances) == 0 {
+		return "", fmt.Errorf("instance not found in describe result")
+	}
+
+	instance := result.Reservations[0].Instances[0]
+	if instance.PublicIpAddress == nil {
+		return "", fmt.Errorf("instance has no public IP address")
+	}
+
+	return *instance.PublicIpAddress, nil
+}
+
+// ExecuteCommand runs a command on the build instance via SSH
+func (sb *SSHBuilder) ExecuteCommand(ctx context.Context, command string) (string, error) {
+	if sb.sshClient == nil {
+		return "", fmt.Errorf("SSH client not initialized")
+	}
+
+	return sb.sshClient.ExecuteCommand(ctx, command)
+}
+
+// ExecuteCommandStream runs a command and streams output in real-time
+func (sb *SSHBuilder) ExecuteCommandStream(ctx context.Context, command string) error {
+	if sb.sshClient == nil {
+		return fmt.Errorf("SSH client not initialized")
+	}
+
+	return sb.sshClient.ExecuteCommandStream(ctx, command, os.Stdout, os.Stderr)
+}
+
+// UploadFile uploads a file to the build instance
+func (sb *SSHBuilder) UploadFile(ctx context.Context, localPath, remotePath string) error {
+	if sb.sshClient == nil {
+		return fmt.Errorf("SSH client not initialized")
+	}
+
+	return sb.sshClient.UploadFile(ctx, localPath, remotePath)
+}
+
+// PrepareInstance sets up the instance for building (install Docker, etc.)
+func (sb *SSHBuilder) PrepareInstance(ctx context.Context) error {
+	fmt.Println("Preparing build instance...")
+
+	// Update system packages
+	fmt.Println("Updating system packages...")
+	err := sb.ExecuteCommandStream(ctx, "sudo dnf update -y")
+	if err != nil {
+		return fmt.Errorf("updating packages: %w", err)
+	}
+
+	// Install Docker
+	fmt.Println("Installing Docker...")
+	dockerInstall := `
+		sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo &&
+		sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin &&
+		sudo systemctl start docker &&
+		sudo systemctl enable docker &&
+		sudo usermod -aG docker rocky
+	`
+	err = sb.ExecuteCommandStream(ctx, dockerInstall)
+	if err != nil {
+		return fmt.Errorf("installing Docker: %w", err)
+	}
+
+	// Install AWS CLI
+	fmt.Println("Installing AWS CLI...")
+	awsInstall := `
+		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" &&
+		unzip awscliv2.zip &&
+		sudo ./aws/install &&
+		rm -rf aws awscliv2.zip
+	`
+	err = sb.ExecuteCommandStream(ctx, awsInstall)
+	if err != nil {
+		return fmt.Errorf("installing AWS CLI: %w", err)
+	}
+
+	// Install git and other build tools
+	fmt.Println("Installing build tools...")
+	err = sb.ExecuteCommandStream(ctx, "sudo dnf install -y git make gcc gcc-gfortran")
+	if err != nil {
+		return fmt.Errorf("installing build tools: %w", err)
+	}
+
+	fmt.Println("Instance preparation completed!")
+	return nil
+}
+
+// TestDockerConnection verifies Docker is working
+func (sb *SSHBuilder) TestDockerConnection(ctx context.Context) error {
+	fmt.Println("Testing Docker connection...")
+	
+	// Test basic Docker command (need to re-login for group changes)
+	_, err := sb.ExecuteCommand(ctx, "newgrp docker << EOF\ndocker --version\nEOF")
+	if err != nil {
+		return fmt.Errorf("testing Docker: %w", err)
+	}
+
+	// Pull a small test image
+	fmt.Println("Testing Docker pull...")
+	err = sb.ExecuteCommandStream(ctx, "newgrp docker << EOF\ndocker pull hello-world\nEOF")
+	if err != nil {
+		return fmt.Errorf("testing Docker pull: %w", err)
+	}
+
+	fmt.Println("Docker connection verified!")
+	return nil
+}
+
+// CleanupInstance terminates the build instance
+func (sb *SSHBuilder) CleanupInstance(ctx context.Context, instanceID string) error {
+	if sb.sshClient != nil {
+		sb.sshClient.Close()
+	}
+
+	fmt.Printf("Terminating instance: %s\n", instanceID)
+	
+	input := &ec2.TerminateInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+
+	_, err := sb.ec2Client.TerminateInstances(ctx, input)
+	if err != nil {
+		return fmt.Errorf("terminating instance: %w", err)
+	}
+
+	// Wait for termination to complete
+	waiter := ec2.NewInstanceTerminatedWaiter(sb.ec2Client)
+	err = waiter.Wait(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	}, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("waiting for instance termination: %w", err)
+	}
+
+	fmt.Printf("Instance %s terminated successfully\n", instanceID)
+	return nil
+}
