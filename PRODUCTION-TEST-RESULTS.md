@@ -28,7 +28,7 @@
 - **Package Management**: DNF with conflict resolution
 
 ### ✅ Phase 3: Container Build
-- **Build Time**: ~2 minutes
+- **Build Time**: ~2 minutes (x86_64), ~5-8 minutes (ARM64)
 - **Base Image**: rockylinux:9
 - **Container Size**: 525MB (uncompressed)
 - **Build Tool**: Podman with proper argument escaping
@@ -65,9 +65,25 @@
 | Cost Optimization | ✅ Ready | Automatic cleanup, efficient instance types |
 | Monitoring | ✅ Ready | Full logging and error handling |
 
+## Multi-Architecture Build Results
+
+### ✅ ARM64/Graviton Validation (August 9, 2025)
+- **Instance**: i-00a84ef55d014dcd1 (Rocky Linux 9, c6g.xlarge)
+- **Total Build Time**: ~8 minutes
+- **Container Size**: 534MB (uncompressed), 190MB (compressed)
+- **ECR Tags**: `arm64-complete`, `arm64-complete-arm64`
+- **Architecture**: Native ARM64 (no emulation)
+- **Status**: ✅ Production Ready
+
+### Build Time Expectations
+- **x86_64 builds**: ~5 minutes total (~2 minutes container build)
+- **ARM64 builds**: ~8-10 minutes total (~5-8 minutes container build)
+- **Dependency installation**: ARM64 requires more packages (92 vs ~60 for x86_64)
+- **Network factors**: Instance location affects download speeds
+
 ## Next Steps for Production
 
-1. **Multi-Architecture Testing**: ARM64/Graviton instances
+1. ~~**Multi-Architecture Testing**: ARM64/Graviton instances~~ ✅ **COMPLETED**
 2. **Compiler Matrix**: Intel, AMD AOCC builds  
 3. **Parallel Builds**: Multiple simultaneous instances
 4. **CI/CD Integration**: GitHub Actions triggers
