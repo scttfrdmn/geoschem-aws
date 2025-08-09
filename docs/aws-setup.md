@@ -59,14 +59,16 @@ Attach the `AdministratorAccess` managed policy to your user.
 
 ### 4. Configure AWS Profile
 
+> **Important**: The platform is designed to use the 'aws' profile by default. Using this standard name ensures compatibility with all documentation and examples.
+
 ```bash
-# Configure the 'aws' profile (or choose your own name)
+# Configure the 'aws' profile (required for platform compatibility)  
 aws configure --profile aws
 
 # Enter when prompted:
 AWS Access Key ID: [Your access key ID]
 AWS Secret Access Key: [Your secret access key]
-Default region name: us-east-1
+Default region name: us-west-2
 Default output format: json
 ```
 
@@ -139,7 +141,7 @@ aws:
 ecr_repository: "123456789012.dkr.ecr.us-east-1.amazonaws.com/geoschem"
 ```
 
-Replace `123456789012` with your AWS account ID and `us-east-1` with your region.
+Replace `123456789012` with your AWS account ID and `us-west-2` with your region.
 
 ## Troubleshooting
 

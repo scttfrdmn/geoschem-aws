@@ -43,7 +43,7 @@ func main() {
         // Use default region if not specified
         recommendRegion := *region
         if recommendRegion == "" {
-            recommendRegion = "us-east-1" // Default region
+            recommendRegion = "us-west-2" // Default region
         }
         
         cfg, err := config.LoadDefaultConfig(ctx, 

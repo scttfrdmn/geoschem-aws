@@ -162,6 +162,8 @@ func TestFullWorkflow(t *testing.T) {
 
 ## Quick Development Setup
 
+> **Important**: All development and testing should use the 'aws' profile consistently. This ensures compatibility with the platform's default configuration and documentation examples.
+
 ### 1. Prerequisites Check
 ```bash
 # Verify you have everything needed
@@ -170,7 +172,7 @@ terraform --version # Should be 1.5+
 aws --version      # Should be 2.x
 docker --version   # Any recent version
 
-# Test AWS access
+# Test AWS access with 'aws' profile
 aws sts get-caller-identity --profile aws
 ```
 
@@ -301,7 +303,7 @@ aws ec2 terminate-instances --instance-ids <instance-id>
 
 ### 2. Regional Availability  
 **Issue**: Services not available in all regions
-**Solution**: Test in us-east-1, us-west-2, eu-west-1 initially
+**Solution**: Test in us-west-2, us-east-1, eu-west-1 initially
 
 ### 3. Quota Limits
 **Issue**: Hitting quotas during testing

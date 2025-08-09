@@ -59,7 +59,7 @@ unzip awscliv2.zip && sudo ./aws/install
 ```
 
 ### 2. Configure AWS Profile
-Create a named AWS profile called 'aws' (or customize in config files):
+Create a named AWS profile called 'aws' (**required for consistency** - see [PROFILE-CONSISTENCY.md](PROFILE-CONSISTENCY.md)):
 
 ```bash
 # Configure the 'aws' profile
@@ -68,7 +68,7 @@ aws configure --profile aws
 # You'll be prompted for:
 # AWS Access Key ID: [Your access key]
 # AWS Secret Access Key: [Your secret key] 
-# Default region name: [e.g., us-east-1]
+# Default region name: [e.g., us-west-2]
 # Default output format: [json]
 ```
 
@@ -239,7 +239,7 @@ Once AWS is configured:
        --profile aws
 
    # Check AWS quotas  
-   go run cmd/builder/main.go --check-quotas --profile aws --region us-east-1
+   go run cmd/builder/main.go --check-quotas --profile aws --region us-west-2
    ```
 
 3. **Configure the Platform**
@@ -247,8 +247,8 @@ Once AWS is configured:
    ```yaml
    aws:
      profile: "aws"
-     region: "us-east-1"  # Your preferred region
-   ecr_repository: "123456789012.dkr.ecr.us-east-1.amazonaws.com/geoschem"
+     region: "us-west-2"  # Your preferred region
+   ecr_repository: "123456789012.dkr.ecr.us-west-2.amazonaws.com/geoschem"
    ```
 
 3. **Deploy Infrastructure**
@@ -296,15 +296,15 @@ Once AWS is configured:
 ### AWS Profile and Region
 The platform uses configurable AWS profiles and regions. You can:
 - Set defaults in `config/build-matrix.yaml`
-- Override via command line: `--profile myprofile --region us-west-2`
+- Override via command line: `--profile aws --region us-west-2`
 
 ### Example Build Commands
 ```bash
-# Using default profile 'aws' with custom region
+# Using default 'aws' profile with us-west-2 region
 go run cmd/builder/main.go --region us-west-2 --arch x86_64 --compiler gcc13 --mpi openmpi
 
-# Using custom profile
-go run cmd/builder/main.go --profile production --region eu-west-1 --build-matrix
+# Using 'aws' profile with different region  
+go run cmd/builder/main.go --profile aws --region us-east-1 --build-matrix
 ```
 
 ## Usage

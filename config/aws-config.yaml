@@ -1,6 +1,6 @@
 aws:
-  profile: "aws"
-  region: "us-east-1"
+  profile: "aws"  # Required: Use 'aws' profile for consistency
+  region: "us-west-2"
   key_pair: "geoschem-builder-key"
   security_group: "sg-geoschem-builder"
   subnet_id: "subnet-xxxxxxxx"
