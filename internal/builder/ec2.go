@@ -125,15 +125,12 @@ func (b *Builder) generateUserData(config *common.BuildConfig) string {
     return `#!/bin/bash
 # Rocky Linux 9 setup script
 dnf update -y
-
 # Install Docker
 dnf install -y docker git unzip
-
 # Start and enable Docker
 systemctl start docker
 systemctl enable docker
 usermod -a -G docker rocky
-
 # Install AWS CLI v2 for x86_64
 if [ "$(uname -m)" = "x86_64" ]; then
     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -142,10 +139,8 @@ else
 fi
 unzip awscliv2.zip
 sudo ./aws/install
-
 # Configure ECR login
 aws ecr get-login-password --region ` + config.AWS.Region + ` | docker login --username AWS --password-stdin ` + config.ECRRepository + `
-
 echo "Rocky Linux 9 instance setup complete" > /tmp/setup-complete
 `
 }

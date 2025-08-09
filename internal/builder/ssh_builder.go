@@ -195,11 +195,7 @@ func (sb *SSHBuilder) PrepareInstance(ctx context.Context, skipUpdate bool) erro
 
 	// Install Docker/Podman (Rocky Linux 9 uses Podman with Docker compatibility)
 	fmt.Println("Installing container runtime...")
-	containerInstall := `
-		sudo dnf install -y podman git unzip &&
-		sudo systemctl enable --now podman.socket &&
-		sudo usermod -aG wheel rocky
-	`
+	containerInstall := "sudo dnf install -y podman git unzip && sudo systemctl enable --now podman.socket && sudo usermod -aG wheel rocky"
 	err := sb.ExecuteCommandStream(ctx, containerInstall)
 	if err != nil {
 		return fmt.Errorf("installing container runtime: %w", err)
@@ -207,13 +203,7 @@ func (sb *SSHBuilder) PrepareInstance(ctx context.Context, skipUpdate bool) erro
 
 	// Install AWS CLI 2.x (as requested by user - dnf version is old)
 	fmt.Println("Installing AWS CLI 2.x...")
-	awsInstall := `
-		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" &&
-		unzip awscliv2.zip &&
-		sudo ./aws/install &&
-		rm -rf aws awscliv2.zip &&
-		aws --version
-	`
+	awsInstall := "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"awscliv2.zip\" && unzip awscliv2.zip && sudo ./aws/install && rm -rf aws awscliv2.zip && aws --version"
 	err = sb.ExecuteCommandStream(ctx, awsInstall)
 	if err != nil {
 		return fmt.Errorf("installing AWS CLI: %w", err)
